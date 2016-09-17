@@ -4,6 +4,19 @@
 #include <stdio.h>
 #include <math.h>
 
+#include <png.h>
+
+#include <omp.h>
+#if _OPENMP < 200805
+#define collapse(x)
+#endif
+#define CHUNK 50
+
+#include "Types.h"
+#include "ToPng.h"
+
+
+
 typedef int i;       // Экономим место с помощью сокращения int до i
 typedef float f;     // Экономим еще больше места с f вместо float
 
@@ -58,36 +71,42 @@ float R() {
 // Возвращаем 0, если луч ничего не задевает и идет вверх, в небо
 // Возвращаем 1, если луч ничего не задевает и идет вниз, в пол
 int T(const vector& o, const vector& d, f& t, vector& n) {
-    t=1e9;
-    int m=0;
-    float p=-o.z/d.z;
-    if(.01<p) {
-        t=p,n=vector(0,0,1),m=1;
+    t = 1e9;
+    int m = 0;
+    float p = -o.z/d.z;
+    if(0.01<p) {
+        t=p;
+        n=vector(0,0,1);
+        m=1;
     }
 
     // Мир зашифрован в G, в 9 линий и 19 столбцов
-    for(int k=19; k--;) // Для каждого столбца
-        for(int j=9; j--;)  // Для каждой строки
+    for(int k=19; k>=0; k--) { // Для каждого столбца
+        for(int j=9; j>=0; j--) { // Для каждой строки
 
             if(G[j]&1 << k) { // Для этой линии j есть ли в столбце int cфера?
-
                 // Сфера есть, но задевает ли ее луч?
-                vector p=o+vector(-k,0,-j-4);
-                float b=p%d,c=p%p-1,q=b*b-c;
+                vector p = o + vector(-k,0,-j-4);
+                float b = p%d;
+                float c = p%p-1;
+                float q = b*b-c;
 
                 // Задевает ли луч сферу?
-                if(q>0) {
+                if(q > 0) {
                     // Да. Считаем расстояние от камеры до сферы
                     float s=-b-sqrt(q);
 
-                    if(s<t && s>0.01)
+                    if(s<t && s>0.01) {
                         // Это минимальное расстояние, сохраняем его. А также
                         // вычиваем вектор отскакивающего луча и записываем его в 'n'
                         t=s,
                         n=!(p+d*t),
                         m=2;
+                    }
                 }
             }
+        }
+    }
 
     return m;
 }
@@ -107,9 +126,9 @@ vector S(const vector& o, const vector& d) {
     }
 
     // Возможно, луч задевает сферу
-    vector h = o+d*t,                    // h - координата пересечения
-           l = !(vector(9+R(),9+R(),16)+h*-1),  // 'l' = направление света (с небольшим искажеем для эффекта мягких теней)
-           r = d+n*(n%d*-2);               // r = полувектор
+    vector h = o+d*t;                    // h - координата пересечения
+    vector l = !(vector(9+R(),9+R(),16)+h*-1);  // 'l' = направление света (с небольшим искажеем для эффекта мягких теней)
+    vector r = d+n*(n%d*-2);               // r = полувектор
 
     // Расчитываем коэффицент Ламберта
     float b = l%n;
@@ -123,29 +142,34 @@ vector S(const vector& o, const vector& d) {
     float p=pow(l%r*(b>0),99);
 
     if(m&1) {  // m == 1
-        h=h*.2; // Сфера не была задета, и луч уходит вниз, в пол: генерируем цвет пола
+        h=h*0.2; // Сфера не была задета, и луч уходит вниз, в пол: генерируем цвет пола
         return((i)(ceil(h.x)+ceil(h.y))&1?vector(3,1,1):vector(3,3,3))*(b*.2+.1);
     }
 
     // m == 2 Была задета сфера: генерируем луч, отскакивающий от поверхности сфера
-    return vector(p,p,p)+S(h,r)*.5; // Ослабляем цвет на 50%, так как он отскакивает от поверхности (* .5)
+    return vector(p,p,p)+S(h,r)*0.5; // Ослабляем цвет на 50%, так как он отскакивает от поверхности (* .5)
 }
+
 
 // Главная функция. Выводит изображение.
 // Использовать программу просто: ./card > erk.ppm
 int main() {
-
-    printf("P6 512 512 255 "); // Заголовок PPM
-
     // Оператор "!" осуществляет нормализацию вектора
-    vector g = !vector(-6,-16,0);       // Направление камеры
+    vector g = !vector(-12,-26,0);       // Направление камеры
     vector a = !(vector(0,0,1)^g) * 0.002; // Вектор, отвечающий за высоту камеры...
     vector b = !(g^a) * 0.002;          // Правый вектор, получаемый с помощью векторного произведения
     vector c = (a+b)*(-256) + g;       // WTF? Вот здесь https:// news.ycombinator.com/item?id=6425965 написано про это подробнее.
 
-    for(int y=512; y--; ) {  // Для каждого столбца
-        for(int x=512; x--; ) { // Для каждого пикселя в строке
+    const size_t size = 512;
+    const size_t bufferSize = size * size;
+    Color* buffer = (Color*)malloc(bufferSize * sizeof(Color));
 
+    omp_set_num_threads(4);
+    // schedule(dynamic, CHUNK)
+    //  collapse(2) 
+    #pragma omp parallel for schedule(dynamic, CHUNK) collapse(2)
+    for(int y = 0; y < size; y++) {  // Для каждого столбца
+        for(int x = 0; x < size; x++) { // Для каждого пикселя в строке
             // Используем класс вектора, чтобы хранить цвет в RGB
             vector p(13,13,13);     // Стандартный цвет пикселя — почти черный
 
@@ -163,7 +187,22 @@ int main() {
                 vector direction = !(t*(-1) + (a*(R()+x) + b*(y+R()) + c)*16);
                 p = S(start, direction)*3.5 + p; // +p для аккумуляции цвета
             }
-            printf("%c%c%c", (i)p.x, (i)p.y, (i)p.z);
+
+            //printf("%c%c%c", (i)p.x, (i)p.y, (i)p.z);
+            size_t index = y*size+x;
+            buffer[index].r = (char)p.x;
+            buffer[index].g = (char)p.y;
+            buffer[index].b = (char)p.z;
         }
     }
+
+    // Заголовок PPM
+    // printf("P6 512 512 255 ");
+    // for (size_t i = bufferSize-1; i >=0; --i){
+    //     printf("%c%c%c", buffer[i].r, buffer[i].g, buffer[i].b);
+    // }
+
+    int result = writeImage("out.png", size, size, buffer);
+
+    free(buffer);
 }
