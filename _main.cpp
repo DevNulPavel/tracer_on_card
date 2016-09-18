@@ -164,9 +164,7 @@ int main() {
     const size_t bufferSize = size * size;
     Color* buffer = (Color*)malloc(bufferSize * sizeof(Color));
 
-    omp_set_num_threads(4);
-    // schedule(dynamic, CHUNK)
-    //  collapse(2) 
+    // omp_set_num_threads(4);
     #pragma omp parallel for schedule(dynamic, CHUNK) collapse(2)
     for(int y = 0; y < size; y++) {  // Для каждого столбца
         for(int x = 0; x < size; x++) { // Для каждого пикселя в строке
@@ -188,6 +186,7 @@ int main() {
                 p = S(start, direction)*3.5 + p; // +p для аккумуляции цвета
             }
 
+            //#pragma omp ordered
             //printf("%c%c%c", (i)p.x, (i)p.y, (i)p.z);
             size_t index = y*size+x;
             buffer[index].r = (char)p.x;
